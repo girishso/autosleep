@@ -1,0 +1,5 @@
+{
+	"ImportPath": "github.com/girishso/autosleep",
+	"GoVersion": "go1.5.1",
+	"Deps": []
+}
