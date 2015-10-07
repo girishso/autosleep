@@ -13,9 +13,9 @@ import (
 )
 
 var (
-	client        *docker.Client
-	wg            sync.WaitGroup
-	hostContainer map[string]*ContainerPort
+	client            *docker.Client
+	wg                sync.WaitGroup
+	hostContainerInfo map[string]*ContainerInfo
 )
 
 const (
@@ -29,10 +29,10 @@ func main() {
 	endpoint := "unix:///var/run/docker.sock"
 	client, _ = docker.NewClient(endpoint)
 
-	hostContainer = map[string]*ContainerPort{
-		"foo.local.info":  &ContainerPort{Name: "foo", Port: "3000", LastAccess: time.Now()},
-		"bar.local.info":  &ContainerPort{Name: "bar", Port: "3001", LastAccess: time.Now()},
-		"test.local.info": &ContainerPort{Name: "test", Port: "3002", LastAccess: time.Now()},
+	hostContainerInfo = map[string]*ContainerInfo{
+		"foo.local.info":  &ContainerInfo{Name: "foo", Port: "3000", LastAccess: time.Now()},
+		"bar.local.info":  &ContainerInfo{Name: "bar", Port: "3001", LastAccess: time.Now()},
+		"test.local.info": &ContainerInfo{Name: "test", Port: "3002", LastAccess: time.Now()},
 	}
 
 	go func() {
@@ -56,7 +56,7 @@ func main() {
 
 func stopInactiveContainers() {
 
-	for _, c := range hostContainer {
+	for _, c := range hostContainerInfo {
 		d := time.Now().Sub(c.LastAccess)
 		if d.Seconds() > TICKER_TIME {
 			if container, er := client.InspectContainer(c.Name); er != nil {
@@ -73,7 +73,7 @@ func stopInactiveContainers() {
 	}
 }
 
-type ContainerPort struct {
+type ContainerInfo struct {
 	Name       string
 	Port       string
 	LastAccess time.Time
@@ -84,26 +84,19 @@ func proxy(w http.ResponseWriter, r *http.Request) {
 	// change the request host to match the target
 	u, _ := url.Parse("http://127.0.0.1:8080")
 
-	currentContainer := hostContainer[r.Host]
+	currentContainerInfo := hostContainerInfo[r.Host]
 
-	log.Println("check if container is running...", currentContainer)
-	container, er := client.InspectContainer(currentContainer.Name)
+	currentContainerInfo.LastAccess = time.Now()
 
-	if er != nil {
-		log.Println("Error: ", er)
-	}
-
-	currentContainer.LastAccess = time.Now()
-
-	if !container.State.Running {
-		log.Println("starting container: ", currentContainer.Name)
+	if !isContainerRunning(currentContainerInfo) {
+		log.Println("starting container: ", currentContainerInfo.Name)
 
 		var hostConfig docker.HostConfig
 
 		hostConfig.PortBindings = map[docker.Port][]docker.PortBinding{
-			docker.Port("80/tcp"): {{HostPort: currentContainer.Port}},
+			docker.Port("80/tcp"): {{HostPort: currentContainerInfo.Port}},
 		}
-		if err := client.StartContainer(currentContainer.Name, &hostConfig); err != nil {
+		if err := client.StartContainer(currentContainerInfo.Name, &hostConfig); err != nil {
 			log.Println("Error: ", err)
 		}
 		time.Sleep(START_CONTAINER_WAIT * time.Second)
@@ -111,10 +104,18 @@ func proxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	proxy := http.StripPrefix("", httputil.NewSingleHostReverseProxy(u))
-	// You can optionally capture/wrap the transport if that's necessary (for
-	// instance, if the transport has been replaced by middleware). Example:
-	// proxy.Transport = &myTransport{proxy.Transport}
-	// proxy.Transport = &myTransport{}
 
 	proxy.ServeHTTP(w, r)
+}
+
+func isContainerRunning(containerInfo *ContainerInfo) bool {
+	log.Println("check if container is running...", containerInfo)
+	container, er := client.InspectContainer(containerInfo.Name)
+
+	if er != nil {
+		log.Println("Error: ", er)
+	}
+
+	return container.State.Running
+
 }
