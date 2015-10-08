@@ -16,6 +16,7 @@ var (
 	client            *docker.Client
 	wg                sync.WaitGroup
 	hostContainerInfo map[string]*ContainerInfo
+	idContainerInfo   map[string]*ContainerInfo
 )
 
 const (
@@ -24,6 +25,15 @@ const (
 	START_CONTAINER_WAIT   = 5
 	READ_WRITE_TIMEOUT     = 10
 )
+
+type ContainerInfo struct {
+	ID            string
+	Name          string
+	Port          string
+	ContainerPort string
+	Running       bool
+	LastAccess    time.Time
+}
 
 func main() {
 	endpoint := "unix:///var/run/docker.sock"
@@ -35,6 +45,8 @@ func main() {
 		"test.local.info":    &ContainerInfo{Name: "test", Port: "3002", ContainerPort: "80/tcp", LastAccess: time.Now()},
 		"example.local.info": &ContainerInfo{Name: "rails_sample", Port: "3003", ContainerPort: "8080/tcp", LastAccess: time.Now()},
 	}
+
+	setAllContainerStates()
 
 	go func() {
 		t := time.NewTicker(time.Second * TICKER_TIME)
@@ -55,8 +67,74 @@ func main() {
 	log.Fatal(s.ListenAndServe())
 }
 
-func stopInactiveContainers() {
+func setAllContainerStates() {
+	idContainerInfo = make(map[string]*ContainerInfo)
 
+	for _, c := range hostContainerInfo {
+		dockerContainer := getDockerContainer(c)
+		c.Running = dockerContainer.State.Running
+		c.ID = dockerContainer.ID
+		idContainerInfo[c.ID] = c
+	}
+
+}
+
+func watchDockerEvernts() {
+	eventChan := make(chan *docker.APIEvents, 100)
+	defer close(eventChan)
+
+	watching := false
+	for {
+
+		if client == nil {
+			break
+		}
+		err := client.Ping()
+		if err != nil {
+			log.Printf("Unable to ping docker daemon: %s", err)
+			if watching {
+				client.RemoveEventListener(eventChan)
+				watching = false
+				client = nil
+			}
+			time.Sleep(10 * time.Second)
+			break
+
+		}
+
+		if !watching {
+			err = client.AddEventListener(eventChan)
+			if err != nil && err != docker.ErrListenerAlreadyExists {
+				log.Printf("Error registering docker event listener: %s", err)
+				time.Sleep(10 * time.Second)
+				continue
+			}
+			watching = true
+			log.Println("Watching docker events")
+		}
+
+		select {
+
+		case event := <-eventChan:
+			if event == nil {
+				if watching {
+					client.RemoveEventListener(eventChan)
+					watching = false
+					client = nil
+				}
+				break
+			}
+
+			// if event.Status == "start" || event.Status == "stop" || event.Status == "die" {
+			log.Printf("Received event %s for container %s", event.Status, event.ID[:12])
+			// case <-time.After(10 * time.Second):
+			// check for docker liveness
+			// log.Println("check for docker liveness")
+		}
+	}
+}
+
+func stopInactiveContainers() {
 	for _, c := range hostContainerInfo {
 		d := time.Now().Sub(c.LastAccess)
 		if d.Seconds() > TICKER_TIME {
@@ -74,23 +152,16 @@ func stopInactiveContainers() {
 	}
 }
 
-type ContainerInfo struct {
-	Name          string
-	Port          string
-	ContainerPort string
-	LastAccess    time.Time
-}
-
 func proxy(w http.ResponseWriter, r *http.Request) {
 
-	// change the request host to match the target
 	u, _ := url.Parse("http://127.0.0.1:8080")
 
 	currentContainerInfo := hostContainerInfo[r.Host]
 
+	// set LastAccess
 	currentContainerInfo.LastAccess = time.Now()
 
-	if !isContainerRunning(currentContainerInfo) {
+	if !getDockerContainer(currentContainerInfo).State.Running {
 		log.Println("starting container: ", currentContainerInfo.Name)
 
 		var hostConfig docker.HostConfig
@@ -110,7 +181,7 @@ func proxy(w http.ResponseWriter, r *http.Request) {
 	proxy.ServeHTTP(w, r)
 }
 
-func isContainerRunning(containerInfo *ContainerInfo) bool {
+func getDockerContainer(containerInfo *ContainerInfo) *docker.Container {
 	log.Println("check if container is running...", containerInfo)
 	container, er := client.InspectContainer(containerInfo.Name)
 
@@ -118,6 +189,6 @@ func isContainerRunning(containerInfo *ContainerInfo) bool {
 		log.Println("Error: ", er)
 	}
 
-	return container.State.Running
+	return container
 
 }
