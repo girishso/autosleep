@@ -29,7 +29,7 @@ const (
 type ContainerInfo struct {
 	ID            string
 	Name          string
-	Port          string
+	HostPort      string
 	ContainerPort string
 	Running       bool
 	LastAccess    time.Time
@@ -40,10 +40,10 @@ func main() {
 	client, _ = docker.NewClient(endpoint)
 
 	hostContainerInfo = map[string]*ContainerInfo{
-		"foo.local.info":     &ContainerInfo{Name: "foo", Port: "3000", ContainerPort: "80/tcp", LastAccess: time.Now()},
-		"bar.local.info":     &ContainerInfo{Name: "bar", Port: "3001", ContainerPort: "80/tcp", LastAccess: time.Now()},
-		"test.local.info":    &ContainerInfo{Name: "test", Port: "3002", ContainerPort: "80/tcp", LastAccess: time.Now()},
-		"example.local.info": &ContainerInfo{Name: "rails_sample", Port: "3003", ContainerPort: "8080/tcp", LastAccess: time.Now()},
+		"foo.local.info":     &ContainerInfo{Name: "foo", HostPort: "3000", ContainerPort: "80/tcp", LastAccess: time.Now()},
+		"bar.local.info":     &ContainerInfo{Name: "bar", HostPort: "3001", ContainerPort: "80/tcp", LastAccess: time.Now()},
+		"test.local.info":    &ContainerInfo{Name: "test", HostPort: "3002", ContainerPort: "80/tcp", LastAccess: time.Now()},
+		"example.local.info": &ContainerInfo{Name: "rails_sample", HostPort: "3003", ContainerPort: "8080/tcp", LastAccess: time.Now()},
 	}
 
 	setAllContainerStates()
@@ -51,8 +51,11 @@ func main() {
 	go watchDockerEvernts()
 
 	go func() {
-		t := time.NewTicker(time.Second * TICKER_TIME)
+		t := time.NewTicker(time.Second * (TICKER_TIME / 3))
 		for {
+			// instead of creating new Tickers for each container use only one Ticker,
+			// good enuf for our purposes
+			// doesn't matter if the container lives for a bit longer
 			stopInactiveContainers()
 			<-t.C
 		}
@@ -183,7 +186,7 @@ func startContainer(containerInfo *ContainerInfo) {
 	var hostConfig docker.HostConfig
 
 	hostConfig.PortBindings = map[docker.Port][]docker.PortBinding{
-		docker.Port(containerInfo.ContainerPort): {{HostPort: containerInfo.Port}},
+		docker.Port(containerInfo.ContainerPort): {{HostPort: containerInfo.HostPort}},
 	}
 	if err := client.StartContainer(containerInfo.Name, &hostConfig); err != nil {
 		log.Println("Error: ", err)
@@ -193,7 +196,7 @@ func startContainer(containerInfo *ContainerInfo) {
 }
 
 func getDockerContainer(containerInfo *ContainerInfo) *docker.Container {
-	log.Println("check if container is running...", containerInfo)
+	log.Println("checking container status...", containerInfo)
 	container, er := client.InspectContainer(containerInfo.Name)
 
 	if er != nil {
