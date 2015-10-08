@@ -19,10 +19,10 @@ var (
 )
 
 const (
-	TICKER_TIME            = 60
+	TICKER_TIME            = 30
 	STOP_CONTAINER_TIMEOUT = 5
-	START_CONTAINER_WAIT   = 10
-	READ_WRITE_TIMEOUT     = 20
+	START_CONTAINER_WAIT   = 5
+	READ_WRITE_TIMEOUT     = 10
 )
 
 func main() {
@@ -30,9 +30,10 @@ func main() {
 	client, _ = docker.NewClient(endpoint)
 
 	hostContainerInfo = map[string]*ContainerInfo{
-		"foo.local.info":  &ContainerInfo{Name: "foo", Port: "3000", LastAccess: time.Now()},
-		"bar.local.info":  &ContainerInfo{Name: "bar", Port: "3001", LastAccess: time.Now()},
-		"test.local.info": &ContainerInfo{Name: "test", Port: "3002", LastAccess: time.Now()},
+		"foo.local.info":     &ContainerInfo{Name: "foo", Port: "3000", ContainerPort: "80/tcp", LastAccess: time.Now()},
+		"bar.local.info":     &ContainerInfo{Name: "bar", Port: "3001", ContainerPort: "80/tcp", LastAccess: time.Now()},
+		"test.local.info":    &ContainerInfo{Name: "test", Port: "3002", ContainerPort: "80/tcp", LastAccess: time.Now()},
+		"example.local.info": &ContainerInfo{Name: "rails_sample", Port: "3003", ContainerPort: "8080/tcp", LastAccess: time.Now()},
 	}
 
 	go func() {
@@ -74,9 +75,10 @@ func stopInactiveContainers() {
 }
 
 type ContainerInfo struct {
-	Name       string
-	Port       string
-	LastAccess time.Time
+	Name          string
+	Port          string
+	ContainerPort string
+	LastAccess    time.Time
 }
 
 func proxy(w http.ResponseWriter, r *http.Request) {
@@ -94,7 +96,7 @@ func proxy(w http.ResponseWriter, r *http.Request) {
 		var hostConfig docker.HostConfig
 
 		hostConfig.PortBindings = map[docker.Port][]docker.PortBinding{
-			docker.Port("80/tcp"): {{HostPort: currentContainerInfo.Port}},
+			docker.Port(currentContainerInfo.ContainerPort): {{HostPort: currentContainerInfo.Port}},
 		}
 		if err := client.StartContainer(currentContainerInfo.Name, &hostConfig); err != nil {
 			log.Println("Error: ", err)
