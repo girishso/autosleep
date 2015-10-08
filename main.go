@@ -15,8 +15,8 @@ import (
 var (
 	client            *docker.Client
 	wg                sync.WaitGroup
-	hostContainerInfo map[string]*ContainerInfo
-	idContainerInfo   map[string]*ContainerInfo
+	hostContainerInfo map[string]*ContainerInfo // maps hostname to ContainerInfo
+	idContainerInfo   map[string]*ContainerInfo // maps ID to ContainerInfo
 )
 
 const (
@@ -47,6 +47,8 @@ func main() {
 	}
 
 	setAllContainerStates()
+
+	go watchDockerEvernts()
 
 	go func() {
 		t := time.NewTicker(time.Second * TICKER_TIME)
@@ -127,9 +129,15 @@ func watchDockerEvernts() {
 
 			// if event.Status == "start" || event.Status == "stop" || event.Status == "die" {
 			log.Printf("Received event %s for container %s", event.Status, event.ID[:12])
-			// case <-time.After(10 * time.Second):
-			// check for docker liveness
-			// log.Println("check for docker liveness")
+			switch event.Status {
+			case "start":
+				idContainerInfo[event.ID].Running = true
+			case "die":
+				idContainerInfo[event.ID].Running = false
+			case "stop":
+				idContainerInfo[event.ID].Running = false
+			}
+
 		}
 	}
 }
@@ -161,24 +169,27 @@ func proxy(w http.ResponseWriter, r *http.Request) {
 	// set LastAccess
 	currentContainerInfo.LastAccess = time.Now()
 
-	if !getDockerContainer(currentContainerInfo).State.Running {
+	if !currentContainerInfo.Running {
 		log.Println("starting container: ", currentContainerInfo.Name)
-
-		var hostConfig docker.HostConfig
-
-		hostConfig.PortBindings = map[docker.Port][]docker.PortBinding{
-			docker.Port(currentContainerInfo.ContainerPort): {{HostPort: currentContainerInfo.Port}},
-		}
-		if err := client.StartContainer(currentContainerInfo.Name, &hostConfig); err != nil {
-			log.Println("Error: ", err)
-		}
-		time.Sleep(START_CONTAINER_WAIT * time.Second)
-		fmt.Println("started container! :)")
+		startContainer(currentContainerInfo)
 	}
 
 	proxy := http.StripPrefix("", httputil.NewSingleHostReverseProxy(u))
 
 	proxy.ServeHTTP(w, r)
+}
+
+func startContainer(containerInfo *ContainerInfo) {
+	var hostConfig docker.HostConfig
+
+	hostConfig.PortBindings = map[docker.Port][]docker.PortBinding{
+		docker.Port(containerInfo.ContainerPort): {{HostPort: containerInfo.Port}},
+	}
+	if err := client.StartContainer(containerInfo.Name, &hostConfig); err != nil {
+		log.Println("Error: ", err)
+	}
+	time.Sleep(START_CONTAINER_WAIT * time.Second)
+	fmt.Println("started container! :)")
 }
 
 func getDockerContainer(containerInfo *ContainerInfo) *docker.Container {
