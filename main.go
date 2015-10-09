@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fsouza/go-dockerclient"
+	"github.com/girishso/autosleep/Godeps/_workspace/src/github.com/fsouza/go-dockerclient"
 )
 
 var (

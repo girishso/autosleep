@@ -1,5 +1,10 @@
 {
 	"ImportPath": "github.com/girishso/autosleep",
 	"GoVersion": "go1.5.1",
-	"Deps": []
+	"Deps": [
+		{
+			"ImportPath": "github.com/fsouza/go-dockerclient",
+			"Rev": "1399676f53e6ccf46e0bf00751b21bed329bc60e"
+		}
+	]
 }
