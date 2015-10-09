@@ -20,7 +20,7 @@ var (
 )
 
 const (
-	TICKER_TIME            = 30
+	TICKER_TIME            = 30 * 60
 	STOP_CONTAINER_TIMEOUT = 5
 	START_CONTAINER_WAIT   = 5
 	READ_WRITE_TIMEOUT     = 10
