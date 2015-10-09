@@ -48,7 +48,7 @@ func main() {
 
 	setAllContainerStates()
 
-	go watchDockerEvernts()
+	go watchDockerEvents()
 
 	go func() {
 		t := time.NewTicker(time.Second * (TICKER_TIME / 3))
@@ -84,7 +84,7 @@ func setAllContainerStates() {
 
 }
 
-func watchDockerEvernts() {
+func watchDockerEvents() {
 	eventChan := make(chan *docker.APIEvents, 100)
 	defer close(eventChan)
 
