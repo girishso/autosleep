@@ -147,17 +147,19 @@ func watchDockerEvents() {
 				break
 			}
 
-			// if event.Status == "start" || event.Status == "stop" || event.Status == "die" {
-			log.Printf("Received event %s for container %s", event.Status, event.ID[:12])
-			switch event.Status {
-			case "start":
-				idContainerInfo[event.ID].Running = true
-			case "die":
-				idContainerInfo[event.ID].Running = false
-			case "stop":
-				idContainerInfo[event.ID].Running = false
-			}
+			if _, ok := idContainerInfo[event.ID]; ok {
+				// if event.Status == "start" || event.Status == "stop" || event.Status == "die" {
+				log.Printf("Received event %s for container %s", event.Status, event.ID[:12])
 
+				switch event.Status {
+				case "start":
+					idContainerInfo[event.ID].Running = true
+				case "die":
+					idContainerInfo[event.ID].Running = false
+				case "stop":
+					idContainerInfo[event.ID].Running = false
+				}
+			}
 		}
 	}
 }
