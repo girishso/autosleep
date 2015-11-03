@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,33 +21,28 @@ var (
 )
 
 const (
-	TICKER_TIME            = 30 * 60
+	TICKER_TIME            = 60
 	STOP_CONTAINER_TIMEOUT = 5
 	START_CONTAINER_WAIT   = 5
 	READ_WRITE_TIMEOUT     = 10
 )
 
 type ContainerInfo struct {
-	ID            string
-	Name          string
-	HostPort      string
-	ContainerPort string
-	Running       bool
-	LastAccess    time.Time
+	ID   string
+	Name string
+	// HostPort      string
+	// ContainerPort string
+	PortBinding map[docker.Port][]docker.PortBinding
+	Running     bool
+	LastAccess  time.Time
+	StartedAt   time.Time
 }
 
 func main() {
 	endpoint := "unix:///var/run/docker.sock"
 	client, _ = docker.NewClient(endpoint)
 
-	hostContainerInfo = map[string]*ContainerInfo{
-		"foo.local.info":     &ContainerInfo{Name: "foo", HostPort: "3000", ContainerPort: "80/tcp", LastAccess: time.Now()},
-		"bar.local.info":     &ContainerInfo{Name: "bar", HostPort: "3001", ContainerPort: "80/tcp", LastAccess: time.Now()},
-		"test.local.info":    &ContainerInfo{Name: "test", HostPort: "3002", ContainerPort: "80/tcp", LastAccess: time.Now()},
-		"example.local.info": &ContainerInfo{Name: "rails_sample", HostPort: "3003", ContainerPort: "8080/tcp", LastAccess: time.Now()},
-	}
-
-	setAllContainerStates()
+	getAllDockerContainers()
 
 	go watchDockerEvents()
 
@@ -72,16 +68,39 @@ func main() {
 	log.Fatal(s.ListenAndServe())
 }
 
-func setAllContainerStates() {
+func getAllDockerContainers() {
+	imgs, _ := client.ListContainers(docker.ListContainersOptions{All: true})
+	hostContainerInfo = make(map[string]*ContainerInfo)
 	idContainerInfo = make(map[string]*ContainerInfo)
 
-	for _, c := range hostContainerInfo {
-		dockerContainer := getDockerContainer(c)
-		c.Running = dockerContainer.State.Running
-		c.ID = dockerContainer.ID
-		idContainerInfo[c.ID] = c
-	}
+	for _, img := range imgs {
+		container, _ := client.InspectContainer(img.ID)
+		vHost := splitKeyValueSlice(container.Config.Env)["VIRTUAL_HOST"]
 
+		if vHost != "" {
+			containerInfo := &ContainerInfo{
+				ID:          container.ID,
+				Name:        container.Name,
+				PortBinding: container.HostConfig.PortBindings,
+				Running:     container.State.Running,
+				LastAccess:  time.Now(),
+				StartedAt:   container.State.StartedAt}
+
+			if existingContainer, ok := hostContainerInfo[vHost]; ok {
+				if existingContainer.StartedAt.UnixNano() < container.State.StartedAt.UnixNano() {
+					// only consider newer containers
+					hostContainerInfo[vHost] = containerInfo
+
+					// remove existing container from idContainerInfo
+					delete(idContainerInfo, existingContainer.ID)
+					idContainerInfo[container.ID] = containerInfo
+				}
+			} else {
+				hostContainerInfo[vHost] = containerInfo
+				idContainerInfo[container.ID] = containerInfo
+			}
+		}
+	}
 }
 
 func watchDockerEvents() {
@@ -169,12 +188,14 @@ func proxy(w http.ResponseWriter, r *http.Request) {
 
 	currentContainerInfo := hostContainerInfo[r.Host]
 
-	// set LastAccess
-	currentContainerInfo.LastAccess = time.Now()
+	if currentContainerInfo != nil {
+		// set LastAccess
+		currentContainerInfo.LastAccess = time.Now()
 
-	if !currentContainerInfo.Running {
-		log.Println("starting container: ", currentContainerInfo.Name)
-		startContainer(currentContainerInfo)
+		if !currentContainerInfo.Running {
+			log.Println("starting container: ", currentContainerInfo.Name)
+			startContainer(currentContainerInfo)
+		}
 	}
 
 	proxy := http.StripPrefix("", httputil.NewSingleHostReverseProxy(u))
@@ -185,10 +206,9 @@ func proxy(w http.ResponseWriter, r *http.Request) {
 func startContainer(containerInfo *ContainerInfo) {
 	var hostConfig docker.HostConfig
 
-	hostConfig.PortBindings = map[docker.Port][]docker.PortBinding{
-		docker.Port(containerInfo.ContainerPort): {{HostPort: containerInfo.HostPort}},
-	}
-	if err := client.StartContainer(containerInfo.Name, &hostConfig); err != nil {
+	hostConfig.PortBindings = containerInfo.PortBinding
+
+	if err := client.StartContainer(containerInfo.ID, &hostConfig); err != nil {
 		log.Println("Error: ", err)
 	}
 	time.Sleep(START_CONTAINER_WAIT * time.Second)
@@ -204,5 +224,21 @@ func getDockerContainer(containerInfo *ContainerInfo) *docker.Container {
 	}
 
 	return container
+
+}
+
+// splitKeyValueSlice takes a string slice where values are of the form
+// KEY, KEY=, KEY=VALUE  or KEY=NESTED_KEY=VALUE2, and returns a map[string]string where items
+// are split at their first `=`.
+func splitKeyValueSlice(in []string) map[string]string {
+	env := make(map[string]string)
+	for _, entry := range in {
+		parts := strings.SplitN(entry, "=", 2)
+		if len(parts) != 2 {
+			parts = append(parts, "")
+		}
+		env[parts[0]] = parts[1]
+	}
+	return env
 
 }
