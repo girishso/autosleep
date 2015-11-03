@@ -21,17 +21,15 @@ var (
 )
 
 const (
-	TICKER_TIME            = 60
+	TICKER_TIME            = 60 * 30
 	STOP_CONTAINER_TIMEOUT = 5
 	START_CONTAINER_WAIT   = 5
 	READ_WRITE_TIMEOUT     = 10
 )
 
 type ContainerInfo struct {
-	ID   string
-	Name string
-	// HostPort      string
-	// ContainerPort string
+	ID          string
+	Name        string
 	PortBinding map[docker.Port][]docker.PortBinding
 	Running     bool
 	LastAccess  time.Time
@@ -213,18 +211,6 @@ func startContainer(containerInfo *ContainerInfo) {
 	}
 	time.Sleep(START_CONTAINER_WAIT * time.Second)
 	fmt.Println("started container! :)")
-}
-
-func getDockerContainer(containerInfo *ContainerInfo) *docker.Container {
-	log.Println("checking container status...", containerInfo)
-	container, er := client.InspectContainer(containerInfo.Name)
-
-	if er != nil {
-		log.Println("Error: ", er)
-	}
-
-	return container
-
 }
 
 // splitKeyValueSlice takes a string slice where values are of the form
