@@ -1,14 +1,16 @@
 package main
 
 import (
+	"flag"
 	"fmt"
-	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
+
+	log "github.com/Sirupsen/logrus"
 
 	"github.com/girishso/autosleep/Godeps/_workspace/src/github.com/fsouza/go-dockerclient"
 )
@@ -18,13 +20,13 @@ var (
 	wg                sync.WaitGroup
 	hostContainerInfo map[string]*ContainerInfo // maps hostname to ContainerInfo
 	idContainerInfo   map[string]*ContainerInfo // maps ID to ContainerInfo
+	AutoSleepIn       int
 )
 
 const (
-	TICKER_TIME            = 60 * 30
-	STOP_CONTAINER_TIMEOUT = 5
-	START_CONTAINER_WAIT   = 5
-	READ_WRITE_TIMEOUT     = 10
+	StopTimeout        = 5
+	StartContainerWait = 5
+	ReadWriteTimeout   = 10
 )
 
 type ContainerInfo struct {
@@ -37,6 +39,8 @@ type ContainerInfo struct {
 }
 
 func main() {
+	flag.IntVar(&AutoSleepIn, "autosleepin", 60*30, "auto sleep containers in this many seconds")
+	flag.Parse()
 	endpoint := "unix:///var/run/docker.sock"
 	client, _ = docker.NewClient(endpoint)
 
@@ -45,7 +49,7 @@ func main() {
 	go watchDockerEvents()
 
 	go func() {
-		t := time.NewTicker(time.Second * (TICKER_TIME / 3))
+		t := time.NewTicker(time.Second * time.Duration(AutoSleepIn/3))
 		for {
 			// instead of creating new Tickers for each container use only one Ticker,
 			// good enuf for our purposes
@@ -60,8 +64,8 @@ func main() {
 	s := &http.Server{
 		Addr:         ":80",
 		Handler:      nil,
-		ReadTimeout:  READ_WRITE_TIMEOUT * time.Second,
-		WriteTimeout: READ_WRITE_TIMEOUT * time.Second,
+		ReadTimeout:  ReadWriteTimeout * time.Second,
+		WriteTimeout: ReadWriteTimeout * time.Second,
 	}
 	log.Fatal(s.ListenAndServe())
 }
@@ -85,13 +89,17 @@ func getAllDockerContainers() {
 				StartedAt:   container.State.StartedAt}
 
 			if existingContainer, ok := hostContainerInfo[vHost]; ok {
+				log.Warningf("container: %s has the same VIRTUAL_HOST=%s as container: %s", container.ID[:12], vHost, existingContainer.ID[:12])
 				if existingContainer.StartedAt.UnixNano() < container.State.StartedAt.UnixNano() {
+					log.Warningf("using the most recently used container: %s, with VIRTUAL_HOST=%s", containerInfo.ID[:12], vHost)
 					// only consider newer containers
 					hostContainerInfo[vHost] = containerInfo
 
 					// remove existing container from idContainerInfo
 					delete(idContainerInfo, existingContainer.ID)
 					idContainerInfo[container.ID] = containerInfo
+				} else {
+					log.Warningf("using the most recently used container: %s, with VIRTUAL_HOST=%s", existingContainer.ID[:12], vHost)
 				}
 			} else {
 				hostContainerInfo[vHost] = containerInfo
@@ -167,15 +175,15 @@ func watchDockerEvents() {
 func stopInactiveContainers() {
 	for _, c := range hostContainerInfo {
 		d := time.Now().Sub(c.LastAccess)
-		if d.Seconds() > TICKER_TIME {
+		if d.Seconds() > float64(AutoSleepIn) {
 			if container, er := client.InspectContainer(c.Name); er != nil {
-				log.Println("Error: ", er)
+				log.Errorln(er)
 			} else if container.State.Running {
-				log.Println("stopping container: ", c.Name, d.Seconds())
-				if err := client.StopContainer(container.ID, STOP_CONTAINER_TIMEOUT); err != nil {
-					log.Println("Error stopping container: ", err)
+				log.Println("stopping container: ", c.ID[:12], c.Name, d.Seconds())
+				if err := client.StopContainer(container.ID, StopTimeout); err != nil {
+					log.Errorln("Error stopping container: ", c.ID[:12], c.Name, err)
 				} else {
-					log.Println("Stopped container.")
+					log.Println("Stopped container.", c.ID[:12], c.Name)
 				}
 			}
 		}
@@ -193,7 +201,7 @@ func proxy(w http.ResponseWriter, r *http.Request) {
 		currentContainerInfo.LastAccess = time.Now()
 
 		if !currentContainerInfo.Running {
-			log.Println("starting container: ", currentContainerInfo.Name)
+			log.Println("starting container: ", currentContainerInfo.ID[:12], currentContainerInfo.Name)
 			startContainer(currentContainerInfo)
 		}
 	}
@@ -209,10 +217,10 @@ func startContainer(containerInfo *ContainerInfo) {
 	hostConfig.PortBindings = containerInfo.PortBinding
 
 	if err := client.StartContainer(containerInfo.ID, &hostConfig); err != nil {
-		log.Println("Error: ", err)
+		log.Errorln(err)
 	}
-	time.Sleep(START_CONTAINER_WAIT * time.Second)
-	fmt.Println("started container! :)")
+	time.Sleep(StartContainerWait * time.Second)
+	fmt.Printf("started container! %s, %s :)\n", containerInfo.ID[:12], containerInfo.Name)
 }
 
 // splitKeyValueSlice takes a string slice where values are of the form
