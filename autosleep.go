@@ -41,6 +41,9 @@ type ContainerInfo struct {
 func main() {
 	flag.IntVar(&AutoSleepIn, "autosleepin", 60*30, "auto sleep containers in this many seconds")
 	flag.Parse()
+
+	log.SetLevel(log.WarnLevel)
+
 	endpoint := "unix:///var/run/docker.sock"
 	client, _ = docker.NewClient(endpoint)
 
